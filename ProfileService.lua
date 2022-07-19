@@ -1041,7 +1041,22 @@ local function SaveProfileAsync(profile, release_from_session, is_overwriting)
 							latest_data.MetaData.ForceLoadSession = nil
 							latest_data.GlobalUpdates = profile.GlobalUpdates._updates_latest
 						end
+						
+						-- 3.5) TODO_SHINJI When saving a profile, get EntityData, the data of each persistent entity
+						-- 		in the profile's world
+						if profile._profile_store._has_world then
+							latest_data.EntityData = {}
+							for index, entity in ipairs(profile.World.entities) do
+								if not entity or not entity.isPersistent then
+									continue
+								end
 
+								local entityData = entity:serialize()
+								if entityData then
+									table.insert(latest_data.EntityData, entityData)
+								end
+							end
+						end
 					end
 				end,
 			},
@@ -1364,6 +1379,7 @@ local Profile = {
 		Data = {}, -- [table] -- Loaded once after ProfileStore:LoadProfileAsync() finishes
 		MetaData = {}, -- [table] -- Updated with every auto-save
 		GlobalUpdates = GlobalUpdates, -- [GlobalUpdates]
+		World = World, -- [World?]
 		
 		_profile_store = ProfileStore, -- [ProfileStore]
 		_profile_key = "", -- [string]
@@ -1821,6 +1837,11 @@ function ProfileStore:LoadProfileAsync(profile_key, not_released_handler, _use_m
 							ForceLoadSession = nil,
 							MetaTags = {},
 						}
+						
+						-- TODO_SHINJI When filling out a missing profile, create the new empty EntityData table.
+						if self._has_world then
+							latest_data.EntityData = {}
+						end
 					end,
 					EditProfile = function(latest_data)
 						if ProfileService.ServiceLocked == false then
@@ -1862,6 +1883,14 @@ function ProfileStore:LoadProfileAsync(profile_key, not_released_handler, _use_m
 						_profile = nil,
 					}
 					setmetatable(global_updates_object, GlobalUpdates)
+					
+					-- TODO_Shinji when loading a profile that has a world, require the World module
+					local World
+					if self._has_world then
+						World = require(script.World)
+						World.ProfileService = ProfileService
+					end
+					
 					local profile = {
 						Data = loaded_data.Data,
 						MetaData = loaded_data.MetaData,
@@ -1873,6 +1902,9 @@ function ProfileStore:LoadProfileAsync(profile_key, not_released_handler, _use_m
 						KeyInfoUpdated = Madwork.NewScriptSignal(),
 
 						GlobalUpdates = global_updates_object,
+						
+						-- TODO_SHINJI When loading a profile that has a world, create the new world using the module
+						World = if self._has_world then World.new() else nil,
 
 						_profile_store = self,
 						_profile_key = profile_key,
@@ -1885,6 +1917,16 @@ function ProfileStore:LoadProfileAsync(profile_key, not_released_handler, _use_m
 
 						_is_user_mock = is_user_mock,
 					}
+					
+					-- TODO_SHINJI When loading a profile which has a world, deserialize the loaded entity data
+					if self._has_world and loaded_data.EntityData then
+						for index, entityData in ipairs(loaded_data.EntityData) do
+							local aClass = profile.World.classes[entityData.ClassName]
+							
+							local newEntity = aClass.fromData(entityData)
+						end
+					end
+					
 					setmetatable(profile, Profile)
 					global_updates_object._profile = profile
 					-- Referencing Profile object in ProfileStore:
@@ -2065,6 +2107,9 @@ function ProfileStore:ViewProfileAsync(profile_key, version, _use_mock) --> [Pro
 				_profile = nil,
 			}
 			setmetatable(global_updates_object, GlobalUpdates)
+			
+			-- TODOO_SHINJI add viewing profile Worlds??
+			
 			local profile = {
 				Data = loaded_data.Data,
 				MetaData = loaded_data.MetaData,
@@ -2187,7 +2232,7 @@ end
 
 -- New ProfileStore:
 
-function ProfileService.GetProfileStore(profile_store_index, profile_template) --> [ProfileStore]
+function ProfileService.GetProfileStore(profile_store_index, profile_template, is_world_store) --> [ProfileStore]
 
 	local profile_store_name
 	local profile_store_scope = nil
@@ -2250,21 +2295,25 @@ function ProfileService.GetProfileStore(profile_store_index, profile_template) -
 		_mock_loaded_profiles = {},
 		_mock_profile_load_jobs = {},
 		_is_pending = false,
+		_has_world = is_world_store
 	}
 	setmetatable(profile_store, ProfileStore)
+
+	local options = Instance.new("DataStoreOptions")
+	options:SetExperimentalFeatures({v2 = true})
 
 	if IsLiveCheckActive == true then
 		profile_store._is_pending = true
 		task.spawn(function()
 			WaitForLiveAccessCheck()
 			if UseMockDataStore == false then
-				profile_store._global_data_store = DataStoreService:GetDataStore(profile_store_name, profile_store_scope)
+				profile_store._global_data_store = DataStoreService:GetDataStore(profile_store_name, profile_store_scope, options)
 			end
 			profile_store._is_pending = false
 		end)
 	else
 		if UseMockDataStore == false then
-			profile_store._global_data_store = DataStoreService:GetDataStore(profile_store_name, profile_store_scope)
+			profile_store._global_data_store = DataStoreService:GetDataStore(profile_store_name, profile_store_scope, options)
 		end
 	end
 
